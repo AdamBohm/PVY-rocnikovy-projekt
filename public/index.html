@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Multiplayer Racing Game</title>
+    <style>
+        body { 
+            margin: 0; 
+            background: #222; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: Arial, sans-serif;
+        }
+        canvas { 
+            background: #333; 
+            display: block; 
+            margin: 20px auto;
+            border: 2px solid #444;
+        }
+        #status { 
+            color: white; 
+            font-size: 24px;
+            margin: 20px;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 5px;
+            text-align: center;
+            min-width: 300px;
+        }
+        .winner {
+            color: #ff0;
+            animation: pulse 1s infinite;
+        }
+        .error {
+            color: #f44;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        #carSelection {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 20px;
+            padding: 20px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 10px;
+            color: white;
+        }
+        .car-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin: 20px;
+        }
+        .car-option {
+            width: 200px;
+            height: 150px;
+            border: 3px solid transparent;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            overflow: hidden;
+        }
+        .car-option:hover {
+            transform: scale(1.05);
+        }
+        .car-option.selected {
+            border-color: #ff0;
+        }
+        .car-option img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #startButton {
+            padding: 10px 20px;
+            font-size: 18px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        #startButton:hover {
+            background: #45a049;
+        }
+        #gameContainer {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+<div id="carSelection">
+    <h2>Choose Your Car</h2>
+    <div class="car-grid">
+        <div class="car-option" data-car="fabia">
+            <img src="/assets/auta/fabia.jpg" alt="Fabia">
+        </div>
+        <div class="car-option" data-car="159">
+            <img src="/assets/auta/159.jpg" alt="159">
+        </div>
+        <div class="car-option" data-car="a6">
+            <img src="/assets/auta/a6.jpg" alt="A6">
+        </div>
+        <div class="car-option" data-car="octavia">
+            <img src="/assets/auta/octavia.jpg" alt="Octavia">
+        </div>
+        <div class="car-option" data-car="felina">
+            <img src="/assets/auta/felina.jpg" alt="Felina">
+        </div>
+    </div>
+    <button id="startButton">Start Race</button>
+</div>
+
+<div id="gameContainer">
+    <div id="status">Connecting...</div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const carSelection = document.getElementById('carSelection');
+    const gameContainer = document.getElementById('gameContainer');
+    const startButton = document.getElementById('startButton');
+    
+    let selectedCar = null;
+    const carImages = {};
+    const carOptions = document.querySelectorAll('.car-option');
+
+    // Load all car images
+    const cars = ['fabia', '159', 'a6', 'octavia', 'felina'];
+    cars.forEach(car => {
+        const img = new Image();
+        img.src = `/assets/auta/${car}.jpg`;
+        carImages[car] = img;
+    });
+
+    // Car selection handling
+    carOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            carOptions.forEach(opt => opt.classList.remove('selected'));
+            option.classList.add('selected');
+            selectedCar = option.dataset.car;
+        });
+    });
+
+    startButton.addEventListener('click', () => {
+        if (!selectedCar) {
+            alert('Please select a car first!');
+            return;
+        }
+        carSelection.style.display = 'none';
+        gameContainer.style.display = 'block';
+        initializeGame();
+    });
+
+    function initializeGame() {
+        // Enhanced Socket.IO configuration
+        const socket = io({
+            transports: ['websocket', 'polling'],
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            timeout: 60000
+        });
+
+        let players = {};
+        let myId = null;
+        let raceOver = false;
+        let lastPingTime = Date.now();
+        const FINISH_LINE_Y = 50;
+        const PLAYER_SPEED = 5;
+        const PLAYER_WIDTH = 60;
+        const PLAYER_HEIGHT = 30;
+        const PING_TIMEOUT = 45000;
+
+        // Connection status handling
+        socket.on('connect', () => {
+            statusDiv.textContent = "Connected! Race in progress...";
+            statusDiv.classList.remove('error');
+            lastPingTime = Date.now();
+            // Send car selection immediately after connection
+            socket.emit('carSelected', selectedCar);
+        });
+
+        socket.on('disconnect', () => {
+            statusDiv.textContent = "Disconnected. Reconnecting...";
+            statusDiv.classList.add('error');
+        });
+
+        socket.on('connect_error', (error) => {
+            statusDiv.textContent = "Connection error. Retrying...";
+            statusDiv.classList.add('error');
+            console.error('Connection error:', error);
+        });
+
+        socket.on('serverFull', () => {
+            statusDiv.textContent = "Server is full. Please try again later.";
+            statusDiv.classList.add('error');
+        });
+
+        socket.on('ping', () => {
+            lastPingTime = Date.now();
+            socket.emit('pong');
+        });
+
+        // Game state handling
+        socket.on('currentPlayers', (serverPlayers) => {
+            players = serverPlayers;
+            myId = socket.id;
+            // Ensure our car selection is applied
+            if (players[myId]) {
+                players[myId].carImage = selectedCar;
+            }
+        });
+
+        socket.on('newPlayer', (player) => {
+            players[player.id] = player;
+        });
+
+        socket.on('playerMoved', (data) => {
+            if (players[data.id]) {
+                players[data.id].x = data.x;
+                players[data.id].y = data.y;
+                players[data.id].rotation = data.rotation;
+            }
+        });
+
+        socket.on('playerDisconnected', (id) => {
+            delete players[id];
+        });
+
+        socket.on('playerCarChanged', (data) => {
+            if (players[data.id]) {
+                players[data.id].carImage = data.carImage;
+            }
+        });
+
+        socket.on('raceOver', (data) => {
+            raceOver = true;
+            if (data.winner === myId) {
+                statusDiv.textContent = "🏁 You won the race!";
+                statusDiv.classList.add('winner');
+            } else {
+                statusDiv.textContent = `🏁 ${data.winnerName} won the race!`;
+            }
+        });
+
+        socket.on('resetRace', () => {
+            raceOver = false;
+            statusDiv.textContent = "Race in progress...";
+            statusDiv.classList.remove('winner');
+            // Ensure our car selection persists after race reset
+            if (players[myId]) {
+                players[myId].carImage = selectedCar;
+            }
+        });
+
+        // Connection health check
+        setInterval(() => {
+            if (Date.now() - lastPingTime > PING_TIMEOUT) {
+                console.log('No ping received, reconnecting...');
+                socket.disconnect();
+                socket.connect();
+            }
+        }, 5000);
+
+        // Player movement
+        let prevX = null;
+        let prevY = null;
+        document.addEventListener('keydown', (e) => {
+            if (raceOver) return;
+            const me = players[myId];
+            if (!me) return;
+
+            let newX = me.x;
+            let newY = me.y;
+
+            if (e.key === 'ArrowUp') newY -= PLAYER_SPEED;
+            if (e.key === 'ArrowDown') newY += PLAYER_SPEED;
+            if (e.key === 'ArrowLeft') newX -= PLAYER_SPEED;
+            if (e.key === 'ArrowRight') newX += PLAYER_SPEED;
+
+            // Keep player within canvas bounds
+            newX = Math.max(0, Math.min(canvas.width - PLAYER_WIDTH, newX));
+            newY = Math.max(0, Math.min(canvas.height - PLAYER_HEIGHT, newY));
+
+            socket.emit('move', { 
+                x: newX, 
+                y: newY,
+                prevX: prevX,
+                prevY: prevY
+            });
+
+            prevX = newX;
+            prevY = newY;
+        });
+
+        // Game rendering
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw finish line
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, FINISH_LINE_Y, canvas.width, 5);
+            
+            // Draw finish line text
+            ctx.fillStyle = 'white';
+            ctx.font = '20px Arial';
+            ctx.fillText('FINISH', canvas.width/2 - 40, FINISH_LINE_Y - 10);
+
+            // Draw players
+            for (let id in players) {
+                const p = players[id];
+                const carImg = carImages[p.carImage];
+                if (carImg) {
+                    ctx.save();
+                    ctx.translate(p.x + PLAYER_WIDTH/2, p.y + PLAYER_HEIGHT/2);
+                    ctx.rotate(p.rotation || 0);
+                    ctx.drawImage(
+                        carImg,
+                        -PLAYER_WIDTH/2,
+                        -PLAYER_HEIGHT/2,
+                        PLAYER_WIDTH,
+                        PLAYER_HEIGHT
+                    );
+                    ctx.restore();
+                }
+                
+                // Draw player name
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText(p.name, p.x, p.y - 5);
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        draw();
+    }
+</script>
+</body>
+</html>
