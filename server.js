@@ -187,7 +187,7 @@ function getRandomColor() {
     const colors = ['red', 'blue', 'green', 'orange', 'purple', 'yellow', 'cyan', 'magenta'];
     return colors[Math.floor(Math.random() * colors.length)];
 }
-
 server.listen(3000, () => {
     console.log('Server listening on port 3000');
 });
+
